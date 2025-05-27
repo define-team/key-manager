@@ -1,0 +1,118 @@
+// --- Настройка I2C и LCD1602 ---
+I2C1.setup({ scl: D22, sda: D23 });
+var LCD = require("HD44780").connectI2C(I2C1); // адрес может быть 0x3F
+
+// --- Настройка сервопривода SG90 ---
+var servoPin = D19;
+var angle = 90;
+var cardActive = false;
+
+// Функция для установки угла сервопривода
+function servoWrite(deg) {
+    var pulse = 0.5 + deg / 180 * 2;
+    analogWrite(servoPin, pulse / 20, { freq: 50 });
+}
+
+// --- Настройка пина RST для RC522 ---
+var rfidRST = D34;
+pinMode(rfidRST, 'output');
+digitalWrite(rfidRST, 1); // держим RST в активном состоянии
+
+// --- Настройка RC522 ---
+SPI1.setup({ sck: D32, mosi: D12, miso: D25 });
+var rfid = require("MFRC522").connect(SPI1, D13, rfidRST);
+
+// --- UID разрешённой карты ---
+var validCard = [33, 135, 250, 3];
+
+// --- Сравнение UID ---
+function isSameCard(a, b) {
+    return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+// --- Настройка матричной клавиатуры 4x4 ---
+// Клавиатура подключена к пинам:
+// строки: D15, D2, D0, D4
+// столбцы: D16, D17, D5, D18
+
+var rows = [D18, D5, D17, D16];
+var cols = [D4, D0, D2, D15];
+
+// Матрица клавиш
+var keys = [
+    ['1','2','3','A'],
+    ['4','5','6','B'],
+    ['7','8','9','C'],
+    ['*','0','#','D']
+];
+
+// Настройка пинов клавиатуры
+for (let r of rows) pinMode(r, 'input_pullup');
+for (let c of cols) pinMode(c, 'output');
+
+// Функция чтения клавиши
+function readKey() {
+    for (let c = 0; c < cols.length; c++) {
+        digitalWrite(cols[c], 0);
+        for (let r = 0; r < rows.length; r++) {
+            if (!digitalRead(rows[r])) {
+                digitalWrite(cols[c], 1);
+                return keys[r][c];
+            }
+        }
+        digitalWrite(cols[c], 1);
+    }
+    return null;
+}
+
+var typedNumber = "";
+
+// --- Проверка карты и клавиатуры каждые 200 мс ---
+setInterval(function () {
+    // Проверка RFID карты
+    rfid.findCards(function (card) {
+        if (!card) return;
+
+        console.log("Найдена карта:", card);
+
+        if (isSameCard(card, validCard)) {
+            if (!cardActive) {
+                cardActive = true;
+                angle = 170;
+                servoWrite(angle);
+                LCD.clear();
+                LCD.print("Open");
+            } else {
+                cardActive = false;
+                angle = 90;
+                servoWrite(angle);
+                LCD.clear();
+                LCD.print("Locked");
+            }
+        } else {
+            LCD.clear();
+            LCD.print("Bad card");
+        }
+    });
+
+    // Чтение клавиатуры
+    var key = readKey();
+    if (key !== null && "0123456789".includes(key)) {
+        typedNumber += key;
+        LCD.clear();
+        LCD.print(typedNumber);
+    } else if(key === '*') {
+        LCD.clear();
+        if(typedNumber.length > 0) {
+            typedNumber = typedNumber.slice(0, typedNumber.length-1);
+        }
+        LCD.print(typedNumber);
+    }
+}, 200);
+
+// --- Инициализация ---
+setTimeout(() => {
+    LCD.clear();
+    LCD.print("Ready...");
+    servoWrite(angle);
+}, 1000);
